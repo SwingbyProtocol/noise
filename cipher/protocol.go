@@ -20,11 +20,13 @@
 package cipher
 
 import (
-	"crypto/sha256"
+	"crypto"
+	_ "crypto/sha512"
+	"net"
+
 	"github.com/perlin-network/noise"
 	"github.com/perlin-network/noise/handshake"
 	"golang.org/x/net/context"
-	"net"
 )
 
 type ProtocolAEAD struct{}
@@ -34,7 +36,7 @@ func NewAEAD() ProtocolAEAD {
 }
 
 func (ProtocolAEAD) Client(info noise.Info, ctx context.Context, auth string, conn net.Conn) (net.Conn, error) {
-	suite, _, err := DeriveAEAD(Aes256GCM(), sha256.New, info.Bytes(handshake.SharedKey), nil)
+	suite, _, err := DeriveAEAD(Aes256GCM(), crypto.SHA512_256.New, info.Bytes(handshake.SharedKey), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +45,7 @@ func (ProtocolAEAD) Client(info noise.Info, ctx context.Context, auth string, co
 }
 
 func (ProtocolAEAD) Server(info noise.Info, conn net.Conn) (net.Conn, error) {
-	suite, _, err := DeriveAEAD(Aes256GCM(), sha256.New, info.Bytes(handshake.SharedKey), nil)
+	suite, _, err := DeriveAEAD(Aes256GCM(), crypto.SHA512_256.New, info.Bytes(handshake.SharedKey), nil)
 	if err != nil {
 		return nil, err
 	}
