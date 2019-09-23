@@ -21,7 +21,8 @@ package cipher
 
 import (
 	"bytes"
-	"crypto/sha256"
+	"crypto"
+	_ "crypto/sha512"
 	"net"
 	"reflect"
 	"testing"
@@ -53,7 +54,7 @@ func newTestConn(in, out *bytes.Buffer) *connAEAD {
 		out: out,
 	}
 
-	suite, _, _ := DeriveAEAD(Aes256GCM(), sha256.New, key, nil)
+	suite, _, _ := DeriveAEAD(Aes256GCM(), crypto.SHA512_256.New, key, nil)
 
 	return newConnAEAD(suite, &tc)
 }
