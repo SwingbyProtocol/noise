@@ -65,7 +65,7 @@ const (
 func main() {
 	flag.Parse()
 
-	listener, err := net.Listen("tcp", ":9098")
+	listener, err := net.Listen("tcp", "0.0.0.0:9098")
 	if err != nil {
 		panic(err)
 	}
