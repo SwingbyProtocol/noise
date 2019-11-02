@@ -23,15 +23,16 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"github.com/perlin-network/noise"
-	"github.com/perlin-network/noise/cipher"
-	"github.com/perlin-network/noise/handshake"
-	"github.com/perlin-network/noise/skademlia"
 	"math/rand"
 	"net"
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	"github.com/perlin-network/noise"
+	"github.com/perlin-network/noise/cipher"
+	"github.com/perlin-network/noise/handshake"
+	"github.com/perlin-network/noise/skademlia"
 )
 
 const payloadSize = 600
@@ -64,7 +65,7 @@ const (
 func main() {
 	flag.Parse()
 
-	listener, err := net.Listen("tcp", ":0")
+	listener, err := net.Listen("tcp", ":9098")
 	if err != nil {
 		panic(err)
 	}
