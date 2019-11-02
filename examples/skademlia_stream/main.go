@@ -63,13 +63,48 @@ const (
 )
 
 func main() {
+	bind := flag.String("bind", "127.0.0.1", "bind ip")
+	port := flag.String("p", "9098", "port")
+	auto := flag.Bool("auto", false, "ip auto scan")
 	flag.Parse()
 
-	listener, err := net.Listen("tcp", "0.0.0.0:9098")
+	findIP := *bind
+	if *auto == true {
+		ifaces, err := net.Interfaces()
+		if err != nil {
+			fmt.Print(err)
+		}
+		// handle err
+		for _, i := range ifaces {
+			addrs, err := i.Addrs()
+			if err != nil {
+				fmt.Print(err)
+			}
+			// handle err
+			for _, addr := range addrs {
+				var ip net.IP
+				switch v := addr.(type) {
+				case *net.IPNet:
+					ip = v.IP
+					if ip.To4() != nil {
+						findIP = ip.String()
+					}
+
+				case *net.IPAddr:
+					ip = v.IP
+					//fmt.Println(ip)
+
+				}
+				// process IP address
+			}
+
+		}
+	}
+
+	listener, err := net.Listen("tcp", findIP+":"+*port)
 	if err != nil {
 		panic(err)
 	}
-
 	fmt.Println("Listening for peers on port:", listener.Addr().(*net.TCPAddr).Port)
 
 	keys, err := skademlia.NewKeys(C1, C2)
@@ -77,7 +112,10 @@ func main() {
 		panic(err)
 	}
 
-	addr := net.JoinHostPort("0.0.0.0", strconv.Itoa(listener.Addr().(*net.TCPAddr).Port))
+	ip := listener.Addr().(*net.TCPAddr).IP.String()
+	fmt.Println("self_ip: -> ", ip)
+
+	addr := net.JoinHostPort(ip, strconv.Itoa(listener.Addr().(*net.TCPAddr).Port))
 
 	client := skademlia.NewClient(addr, keys, skademlia.WithC1(C1), skademlia.WithC2(C2))
 	client.SetCredentials(noise.NewCredentials(addr, handshake.NewECDH(), cipher.NewAEAD(), client.Protocol()))
