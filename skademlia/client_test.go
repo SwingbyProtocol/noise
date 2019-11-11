@@ -1,6 +1,7 @@
 package skademlia
 
 import (
+	"bytes"
 	"context"
 	"github.com/perlin-network/noise"
 	"github.com/perlin-network/noise/edwards25519"
@@ -9,7 +10,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"net"
-	"sync"
+	"sort"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -42,100 +43,128 @@ func TestClientFields(t *testing.T) {
 }
 
 func TestClient(t *testing.T) {
-	c1, lis1 := getClient(t, 1, 1)
-	defer lis1.Close()
-	c2, lis2 := getClient(t, 1, 1)
-	defer lis2.Close()
+	c1 := newClientTestContainer(t, 1, 1)
+	c1.serve()
+	defer c1.lis.Close()
+	c2 := newClientTestContainer(t, 1, 1)
+	c2.serve()
+	defer c2.lis.Close()
 
 	var onPeerJoinCalled int32
 
-	c2.OnPeerJoin(func(conn *grpc.ClientConn, id *ID) {
+	c1.client.OnPeerJoin(func(conn *grpc.ClientConn, id *ID) {
 		atomic.StoreInt32(&onPeerJoinCalled, 1)
 	})
 
 	onPeerLeave := make(chan struct{})
 
-	c2.OnPeerLeave(func(conn *grpc.ClientConn, id *ID) {
+	c2.client.OnPeerLeave(func(conn *grpc.ClientConn, id *ID) {
 		close(onPeerLeave)
 	})
 
-	server := c1.Listen()
-	go func() {
-		if err := server.Serve(lis1); err != nil {
-			t.Fatal(err)
-		}
-	}()
-	defer server.Stop()
-
-	conn, err := c2.Dial(lis1.Addr().String())
+	conn, err := c2.client.Dial(c1.lis.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
 
-	assert.Len(t, c2.Bootstrap(), 1)
-	assert.Len(t, c2.AllPeers(), 1)
-	assert.Len(t, c2.ClosestPeerIDs(), 1)
-	assert.Len(t, c2.ClosestPeers(), 1)
+	assert.Len(t, c2.client.Bootstrap(), 1)
+	assert.Len(t, c2.client.AllPeers(), 1)
+	assert.Len(t, c2.client.ClosestPeerIDs(), 1)
+	assert.Len(t, c2.client.ClosestPeers(), 1)
 
-	assert.Equal(t, c1.id.checksum, c2.ClosestPeerIDs()[0].checksum)
+	assert.Equal(t, c1.client.id.checksum, c2.client.ClosestPeerIDs()[0].checksum)
 
-	server.Stop()
+	c1.server.Stop()
 
 	assert.Equal(t, int32(1), atomic.LoadInt32(&onPeerJoinCalled))
 
 	select {
 	case <-onPeerLeave:
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(2000 * time.Millisecond):
 		assert.Fail(t, "OnPeerLeave never called")
 	}
 }
 
 func TestClientEviction(t *testing.T) {
-	client, _ := getClient(t, 1, 1)
-	client.table.setBucketSize(1)
+	bucketSize := 2
 
-	type peer struct {
-		c *Client
-		l net.Listener
+	s := newClientTestContainer(t, 1, 1)
+	s.client.table.setBucketSize(bucketSize)
+	s.serve()
+	defer s.cleanup()
+
+	accept := make(chan struct{})
+
+	s.client.OnPeerJoin(func(conn *grpc.ClientConn, id *ID) {
+		accept <- struct{}{}
+	})
+
+	peersByBuckets := make(map[int][]*ID)
+	for i := 0; i < 10; i++ {
+		c := newClientTestContainer(t, 1, 1)
+		c.serve()
+
+		_, err := s.client.Dial(c.lis.Addr().String())
+		assert.NoError(t, err)
+
+		bucketID := getBucketID(s.client.id.checksum, c.client.id.checksum)
+		peersByBuckets[bucketID] = append(peersByBuckets[bucketID], c.client.id)
+
+		// Wait for the server to dial the peer and update the table.
+		time.Sleep(150 * time.Millisecond)
+
+		// Kill the client to make sure it can get evicted.
+		c.cleanup()
 	}
 
-	var peers []*peer
-	var wg sync.WaitGroup
-
-	for i := 0; i < 3; i++ {
-		wg.Add(1)
-
-		c, lis := getClient(t, 1, 1)
-		peers = append(peers, &peer{
-			c: c,
-			l: lis,
-		})
-
-		go func(i int) {
-			p := peers[i]
-			s := p.c.Listen()
-
-			wg.Done()
-
-			_ = s.Serve(p.l)
-		}(i)
+	for i := 0; i < 10; i++ {
+		<-accept
 	}
 
-	wg.Wait()
+	// Get the peers closest to the server.
+	var expectedClosestPeerIDs []*ID
+	var closest = len(s.client.table.buckets)
+	for closest >= 0 {
+		if ids := peersByBuckets[closest]; ids != nil {
+			for i := 0; i < len(ids); i++ {
+				id := ids[i]
 
-	for _, p := range peers {
-		_, _ = client.Dial(p.l.Addr().String())
+				// Prepend to sort it by the latest peers.
+				expectedClosestPeerIDs = append([]*ID{id}, expectedClosestPeerIDs...)
+			}
+		}
+
+		if len(expectedClosestPeerIDs) >= bucketSize {
+			break
+		}
+		closest--
 	}
 
-	client.Bootstrap()
+	if expectedClosestPeerIDs == nil {
+		assert.FailNow(t, "failed to find expected closest peer IDs")
+	}
 
-	assert.Len(t, client.ClosestPeerIDs(), 1)
+	sort.Slice(expectedClosestPeerIDs, func(i, j int) bool {
+		return bytes.Compare(xor(expectedClosestPeerIDs[i].checksum[:], s.client.id.checksum[:]), xor(expectedClosestPeerIDs[j].checksum[:], s.client.id.checksum[:])) == -1
+	})
+
+	if len(expectedClosestPeerIDs) > bucketSize {
+		expectedClosestPeerIDs = expectedClosestPeerIDs[:bucketSize]
+	}
+
+	closestPeerIDs := s.client.ClosestPeerIDs()
+	for i := 0; i < len(closestPeerIDs); i++ {
+		actual := closestPeerIDs[i]
+		expected := expectedClosestPeerIDs[i]
+
+		assert.Equal(t, expected.id, actual.id, )
+	}
 }
 
 func TestInterceptedServerStream(t *testing.T) {
-	c, lis := getClient(t, 1, 1)
-	defer lis.Close()
+	c := newClientTestContainer(t, 1, 1)
+	defer c.cleanup()
 	dss := &dummyServerStream{}
 
 	var nodes []*ID
@@ -173,56 +202,56 @@ func TestInterceptedServerStream(t *testing.T) {
 	copy(publicKey[:], []byte("12345678901234567890123456789016"))
 	nodes[6].checksum = publicKey
 
-	c.table = NewTable(nodes[0])
+	c.client.table = NewTable(nodes[0])
 
 	for i := 1; i < 5; i++ {
-		assert.NoError(t, c.table.Update(nodes[i]))
+		assert.NoError(t, c.client.table.Update(nodes[i]))
 	}
 
 	// Test SendMsg
 
-	closest := c.table.FindClosest(nodes[4], 2)
+	closest := c.client.table.FindClosest(nodes[4], 2)
 	assert.Len(t, closest, 2)
 	assert.Equal(t, "0002", closest[0].address)
 	assert.Equal(t, "0003", closest[1].address)
 
 	iss := InterceptedServerStream{
 		ServerStream: dss,
-		client:       c,
+		client:       c.client,
 		id:           nodes[5],
 	}
 
 	assert.NoError(t, iss.SendMsg(nil))
 
-	closest = c.table.FindClosest(nodes[4], 2)
+	closest = c.client.table.FindClosest(nodes[4], 2)
 	assert.Len(t, closest, 2)
 	assert.Equal(t, "0005", closest[0].address)
 	assert.Equal(t, "0002", closest[1].address)
 
 	// Test RecvMsg
 
-	closest = c.table.FindClosest(nodes[5], 2)
+	closest = c.client.table.FindClosest(nodes[5], 2)
 	assert.Len(t, closest, 2)
 	assert.Equal(t, "0004", closest[0].address)
 	assert.Equal(t, "0003", closest[1].address)
 
 	iss = InterceptedServerStream{
 		ServerStream: dummyServerStream{},
-		client:       c,
+		client:       c.client,
 		id:           nodes[6],
 	}
 
 	assert.NoError(t, iss.RecvMsg(nil))
 
-	closest = c.table.FindClosest(nodes[5], 2)
+	closest = c.client.table.FindClosest(nodes[5], 2)
 	assert.Len(t, closest, 2)
 	assert.Equal(t, "0004", closest[0].address)
 	assert.Equal(t, "0006", closest[1].address)
 }
 
 func TestInterceptedClientStream(t *testing.T) {
-	c, lis := getClient(t, 1, 1)
-	defer lis.Close()
+	c := newClientTestContainer(t, 1, 1)
+	defer c.cleanup()
 
 	var nodes []*ID
 
@@ -259,54 +288,90 @@ func TestInterceptedClientStream(t *testing.T) {
 	copy(publicKey[:], []byte("12345678901234567890123456789016"))
 	nodes[6].checksum = publicKey
 
-	c.table = NewTable(nodes[0])
+	c.client.table = NewTable(nodes[0])
 
 	for i := 1; i < 5; i++ {
-		assert.NoError(t, c.table.Update(nodes[i]))
+		assert.NoError(t, c.client.table.Update(nodes[i]))
 	}
 
 	// Test SendMsg
 
-	closest := c.table.FindClosest(nodes[4], 2)
+	closest := c.client.table.FindClosest(nodes[4], 2)
 	assert.Len(t, closest, 2)
 	assert.Equal(t, "0002", closest[0].address)
 	assert.Equal(t, "0003", closest[1].address)
 
 	iss := InterceptedClientStream{
 		ClientStream: dummyClientStream{},
-		client:       c,
+		client:       c.client,
 		id:           nodes[5],
 	}
 
 	assert.NoError(t, iss.SendMsg(nil))
 
-	closest = c.table.FindClosest(nodes[4], 2)
+	closest = c.client.table.FindClosest(nodes[4], 2)
 	assert.Len(t, closest, 2)
 	assert.Equal(t, "0005", closest[0].address)
 	assert.Equal(t, "0002", closest[1].address)
 
 	// Test RecvMsg
 
-	closest = c.table.FindClosest(nodes[5], 2)
+	closest = c.client.table.FindClosest(nodes[5], 2)
 	assert.Len(t, closest, 2)
 	assert.Equal(t, "0004", closest[0].address)
 	assert.Equal(t, "0003", closest[1].address)
 
 	iss = InterceptedClientStream{
 		ClientStream: dummyClientStream{},
-		client:       c,
+		client:       c.client,
 		id:           nodes[6],
 	}
 
 	assert.NoError(t, iss.RecvMsg(nil))
 
-	closest = c.table.FindClosest(nodes[5], 2)
+	closest = c.client.table.FindClosest(nodes[5], 2)
 	assert.Len(t, closest, 2)
 	assert.Equal(t, "0004", closest[0].address)
 	assert.Equal(t, "0006", closest[1].address)
 }
 
-func getClient(t *testing.T, c1, c2 int) (*Client, net.Listener) {
+type clientTestContainer struct {
+	client   *Client
+	lis      net.Listener
+	server   *grpc.Server
+	onClient func(noise.Info)
+	onServer func(noise.Info)
+}
+
+// Rename to close
+func (c *clientTestContainer) cleanup() {
+	c.server.Stop()
+	c.lis.Close()
+}
+
+func (c *clientTestContainer) serve() {
+	go func() {
+		_ = c.server.Serve(c.lis)
+	}()
+}
+
+func (c *clientTestContainer) Client(info noise.Info, ctx context.Context, authority string, conn net.Conn) (net.Conn, error) {
+	if c.onClient != nil {
+		c.onClient(info)
+	}
+
+	return conn, nil
+}
+
+func (c *clientTestContainer) Server(info noise.Info, conn net.Conn) (net.Conn, error) {
+	if c.onServer != nil {
+		c.onServer(info)
+	}
+
+	return conn, nil
+}
+
+func newClientTestContainer(t *testing.T, c1, c2 int) *clientTestContainer {
 	lis, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		t.Fatal(err)
@@ -317,9 +382,17 @@ func getClient(t *testing.T, c1, c2 int) (*Client, net.Listener) {
 	}
 
 	c := NewClient(lis.Addr().String(), keys, WithC1(c1), WithC2(c2))
-	c.SetCredentials(noise.NewCredentials(lis.Addr().String(), c.Protocol()))
+	testClient := &clientTestContainer{
+		client: c,
+		lis:    lis,
+	}
+	c.SetCredentials(noise.NewCredentials(lis.Addr().String(), c.Protocol(), testClient))
 
-	return c, lis
+	server := c.Listen()
+
+	testClient.server = server
+
+	return testClient
 }
 
 type dummyServerStream struct {
