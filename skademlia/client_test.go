@@ -25,7 +25,7 @@ func TestClientFields(t *testing.T) {
 	client := NewClient("127.0.0.1", keys)
 	assert.NotNil(t, client.Logger())
 	assert.Equal(t, client, client.Protocol().client)
-	assert.Equal(t, 32, client.BucketSize())
+	assert.Equal(t, 64, client.BucketSize())
 	assert.Equal(t, keys, client.Keys())
 
 	assert.NotNil(t, client.ID())

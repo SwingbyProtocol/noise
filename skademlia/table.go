@@ -45,7 +45,7 @@ func NewTable(self *ID) *Table {
 		self: self,
 
 		buckets:    make([]*Bucket, len(self.checksum)*8),
-		bucketSize: 32,
+		bucketSize: 64,
 	}
 
 	for i := range t.buckets {
