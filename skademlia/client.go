@@ -301,7 +301,8 @@ func (c *Client) DisconnectByAddress(address string) error {
 
 func (c *Client) BanAndDisconnectByAddress(address string, expireAt time.Time) error {
 	c.peerBlacklist.Store(address, expireAt)
-	return c.DisconnectByAddress(address)
+	_ = c.DisconnectByAddress(address)
+	return nil // ignore the error from disconnect which may happen when the peer does not exist
 }
 
 func (c *Client) connLoop(conn *grpc.ClientConn) {

@@ -158,8 +158,46 @@ func TestClientEviction(t *testing.T) {
 		actual := closestPeerIDs[i]
 		expected := expectedClosestPeerIDs[i]
 
-		assert.Equal(t, expected.id, actual.id, )
+		assert.Equal(t, expected.id, actual.id)
 	}
+}
+
+func TestClientBlacklist(t *testing.T) {
+	c1 := newClientTestContainer(t, 1, 1)
+	c1.serve()
+	defer c1.lis.Close()
+	c2 := newClientTestContainer(t, 1, 1)
+	c2.serve()
+	defer c2.lis.Close()
+
+	var onPeerJoinCalled int32
+
+	c1.client.OnPeerJoin(func(conn *grpc.ClientConn, id *ID) {
+		atomic.StoreInt32(&onPeerJoinCalled, 1)
+	})
+
+	onPeerLeave := make(chan struct{})
+
+	c2.client.OnPeerLeave(func(conn *grpc.ClientConn, id *ID) {
+		close(onPeerLeave)
+	})
+
+	if err := c2.client.BanAndDisconnectByAddress(c1.lis.Addr().String(), time.Now().Add(1 * time.Minute)); !assert.NoError(t, err) {
+		return
+	}
+	_, err := c2.client.Dial(c1.lis.Addr().String())
+	if !assert.Error(t, err) {
+		t.Fatal("the peer is not blacklisted")
+	}
+
+	assert.Len(t, c2.client.Bootstrap(), 0)
+	assert.Len(t, c2.client.AllPeers(), 0)
+	assert.Len(t, c2.client.ClosestPeerIDs(), 0)
+	assert.Len(t, c2.client.ClosestPeers(), 0)
+
+	c1.server.Stop()
+
+	assert.Equal(t, int32(0), atomic.LoadInt32(&onPeerJoinCalled))
 }
 
 func TestInterceptedServerStream(t *testing.T) {
