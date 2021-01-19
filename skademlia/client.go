@@ -147,7 +147,16 @@ func (c *Client) ClosestPeers(opts ...DialOption) []ClosestPeer {
 
 	var peers []ClosestPeer
 
+	now := time.Now()
 	for i := range ids {
+		if banUntil, found := c.peerBlacklist.Load(ids[i].address); found {
+			banUntilT := banUntil.(time.Time)
+			if now.Before(banUntilT) {
+				continue
+			} else {
+				c.peerBlacklist.Delete(ids[i].address)
+			}
+		}
 		if conn, err := c.Dial(ids[i].address, opts...); err == nil {
 			peers = append(peers, ClosestPeer{
 				Conn: conn,
@@ -236,10 +245,10 @@ func (c *Client) DialContext(ctx context.Context, addr string) (*grpc.ClientConn
 	}
 
 	now := time.Now()
-	if blacklistExpirationVal, exists := c.peerBlacklist.Load(addr); exists {
-		blacklistExpiration := blacklistExpirationVal.(time.Time)
-		if now.Before(blacklistExpiration) {
-			return nil, fmt.Errorf("attempted to connect to a blacklisted peer %s (expires %v)", addr, blacklistExpiration)
+	if banUntil, exists := c.peerBlacklist.Load(addr); exists {
+		banUntilT := banUntil.(time.Time)
+		if now.Before(banUntilT) {
+			return nil, fmt.Errorf("attempted to connect to a blacklisted peer %s (expires %v)", addr, banUntilT)
 		} else {
 			c.peerBlacklist.Delete(addr)
 		}
