@@ -22,18 +22,21 @@ package skademlia
 import (
 	"bytes"
 	"context"
-	"github.com/perlin-network/noise"
+	"fmt"
+	"io/ioutil"
+	"log"
+	"sort"
+	"sync"
+	"time"
+
 	"github.com/phf/go-queue/queue"
 	"github.com/pkg/errors"
 	"golang.org/x/crypto/blake2b"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/peer"
-	"io/ioutil"
-	"log"
-	"sort"
-	"sync"
-	"time"
+
+	"github.com/perlin-network/noise"
 )
 
 type Client struct {
@@ -48,9 +51,10 @@ type Client struct {
 	keys  *Keypair
 	table *Table
 
-	peers     map[string]*grpc.ClientConn
-	peersID   map[string]*ID
-	peersLock sync.RWMutex
+	peers         map[string]*grpc.ClientConn
+	peersID       map[string]*ID
+	peersLock     sync.RWMutex
+	peerBlacklist sync.Map
 
 	protocol Protocol
 
@@ -231,6 +235,14 @@ func (c *Client) DialContext(ctx context.Context, addr string) (*grpc.ClientConn
 		return nil, errors.New("attempted to dial self")
 	}
 
+	now := time.Now()
+	if blacklistExpirationVal, exists := c.peerBlacklist.Load(addr); exists {
+		blacklistExpiration := blacklistExpirationVal.(time.Time)
+		if now.Before(blacklistExpiration) {
+			return nil, fmt.Errorf("attempted to connect to a blacklisted peer %s (expires %v)", addr, blacklistExpiration)
+		}
+	}
+
 	c.peersLock.Lock()
 	if conn, exists := c.peers[addr]; exists {
 		c.peersLock.Unlock()
@@ -285,6 +297,11 @@ func (c *Client) DisconnectByAddress(address string) error {
 	}
 
 	return errors.Errorf("could not disconnect peer: peer with address %s not found", address)
+}
+
+func (c *Client) BanAndDisconnectByAddress(address string, expireAt time.Time) error {
+	c.peerBlacklist.Store(address, expireAt)
+	return c.DisconnectByAddress(address)
 }
 
 func (c *Client) connLoop(conn *grpc.ClientConn) {
