@@ -240,6 +240,8 @@ func (c *Client) DialContext(ctx context.Context, addr string) (*grpc.ClientConn
 		blacklistExpiration := blacklistExpirationVal.(time.Time)
 		if now.Before(blacklistExpiration) {
 			return nil, fmt.Errorf("attempted to connect to a blacklisted peer %s (expires %v)", addr, blacklistExpiration)
+		} else {
+			c.peerBlacklist.Delete(addr)
 		}
 	}
 
