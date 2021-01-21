@@ -20,10 +20,10 @@
 package skademlia
 
 import (
+	"crypto/rand"
 	"github.com/perlin-network/noise/edwards25519"
 	"github.com/pkg/errors"
 	"golang.org/x/crypto/blake2b"
-	"crypto/rand"
 )
 
 // generateKeys attempts to randomly generate a suitable Ed25519 keypair which satisfies the

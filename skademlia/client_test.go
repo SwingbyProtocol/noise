@@ -182,7 +182,7 @@ func TestClientBlacklist(t *testing.T) {
 		close(onPeerLeave)
 	})
 
-	if err := c2.client.BanAndDisconnectByAddress(c1.lis.Addr().String(), time.Now().Add(1 * time.Minute)); !assert.NoError(t, err) {
+	if err := c2.client.BanAndDisconnectByAddress(c1.lis.Addr().String(), time.Now().Add(1*time.Minute)); !assert.NoError(t, err) {
 		return
 	}
 	_, err := c2.client.Dial(c1.lis.Addr().String())
