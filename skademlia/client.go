@@ -133,8 +133,17 @@ func (c *Client) AllPeers() []*grpc.ClientConn {
 
 	conns := make([]*grpc.ClientConn, 0, len(c.peers))
 
+	now := time.Now()
 	for _, conn := range c.peers {
 		if connState := conn.GetState(); connState == connectivity.Ready {
+			if banUntil, found := c.peerBlacklist.Load(conn.Target()); found {
+				banUntilT := banUntil.(time.Time)
+				if now.Before(banUntilT) {
+					continue
+				} else {
+					c.peerBlacklist.Delete(conn.Target())
+				}
+			}
 			conns = append(conns, conn)
 		}
 	}
