@@ -13,7 +13,7 @@ func TestProtocol(t *testing.T) {
 	sharedKey := []byte("secret_key")
 	accept := make(chan *connAEAD, 1)
 
-	ecdh := NewAEAD()
+	ecdh := NewAEAD(false)
 	lis := launchServer(t, ecdh, sharedKey, accept)
 	defer lis.Close()
 
@@ -38,7 +38,7 @@ func TestProtocol(t *testing.T) {
 func TestProtocolKeyMismatch(t *testing.T) {
 	accept := make(chan *connAEAD, 1)
 
-	ecdh := NewAEAD()
+	ecdh := NewAEAD(false)
 	lis := launchServer(t, ecdh, []byte("server_secret_key"), accept)
 	defer lis.Close()
 

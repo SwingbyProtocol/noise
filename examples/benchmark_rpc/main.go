@@ -54,7 +54,7 @@ func (server) GetMessage(context.Context, *Message) (*Message, error) {
 }
 
 func main() {
-	protocol := noise.NewCredentials("127.0.0.1", handshake.NewECDH(), cipher.NewAEAD())
+	protocol := noise.NewCredentials("127.0.0.1", handshake.NewECDH(), cipher.NewAEAD(false))
 
 	go func() {
 		for range time.Tick(1 * time.Second) {

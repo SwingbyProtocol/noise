@@ -29,14 +29,20 @@ import (
 	"golang.org/x/net/context"
 )
 
-type ProtocolAEAD struct{}
-
-func NewAEAD() ProtocolAEAD {
-	return ProtocolAEAD{}
+type ProtocolAEAD struct{
+	legacyHash bool
 }
 
-func (ProtocolAEAD) Client(info noise.Info, ctx context.Context, auth string, conn net.Conn) (net.Conn, error) {
-	suite, _, err := DeriveAEAD(Aes256GCM(), crypto.SHA512_256.New, info.Bytes(handshake.SharedKey), nil)
+func NewAEAD(legacyHash bool) ProtocolAEAD {
+	return ProtocolAEAD{legacyHash}
+}
+
+func (p ProtocolAEAD) Client(info noise.Info, _ context.Context, _ string, conn net.Conn) (net.Conn, error) {
+	hashFn := crypto.SHA512_256.New
+	if p.legacyHash {
+		hashFn = crypto.SHA256.New
+	}
+	suite, _, err := DeriveAEAD(Aes256GCM(), hashFn, info.Bytes(handshake.SharedKey), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -44,8 +50,12 @@ func (ProtocolAEAD) Client(info noise.Info, ctx context.Context, auth string, co
 	return newConnAEAD(suite, conn), nil
 }
 
-func (ProtocolAEAD) Server(info noise.Info, conn net.Conn) (net.Conn, error) {
-	suite, _, err := DeriveAEAD(Aes256GCM(), crypto.SHA512_256.New, info.Bytes(handshake.SharedKey), nil)
+func (p ProtocolAEAD) Server(info noise.Info, conn net.Conn) (net.Conn, error) {
+	hashFn := crypto.SHA512_256.New
+	if p.legacyHash {
+		hashFn = crypto.SHA256.New
+	}
+	suite, _, err := DeriveAEAD(Aes256GCM(), hashFn, info.Bytes(handshake.SharedKey), nil)
 	if err != nil {
 		return nil, err
 	}
